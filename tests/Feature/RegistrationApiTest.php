@@ -4,6 +4,7 @@ namespace Tests\Feature;
 
 use App\Models\Event;
 use App\Models\User;
+use App\RegistrationStatus;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Tests\TestCase;
 use PHPUnit\Framework\Attributes\Test;
@@ -105,5 +106,70 @@ class RegistrationApiTest extends TestCase
             'event_id' => $limitedEvent->id,
             'status' => 'cancelled',
         ]);
+    }
+
+    #[Test]
+    public function a_user_who_previously_cancelled_can_re_register_for_an_event_with_space(): void
+    {
+        $userToReRegister = User::find(1);
+        $eventWithSpace = Event::find(1);
+
+        \App\Models\Registration::create([
+            'user_id' => $userToReRegister->id,
+            'event_id' => $eventWithSpace->id,
+            'status' => RegistrationStatus::CANCELLED,
+        ]);
+
+        $this->assertDatabaseCount('registrations', 1);
+
+        $response = $this->actingAs($userToReRegister)
+                         ->postJson("/api/{$eventWithSpace->id}/register");
+
+        $response->assertStatus(201);
+        $response->assertJson(['message' => 'Successfully registered']);
+
+        $this->assertDatabaseHas('registrations', [
+            'user_id' => $userToReRegister->id,
+            'event_id' => $eventWithSpace->id,
+            'status' => 'registered',
+        ]);
+
+        $this->assertDatabaseCount('registrations', 1);
+    }
+
+    #[Test]
+    public function a_user_who_previously_cancelled_is_placed_on_the_waitlist_for_a_full_event(): void
+    {
+        $userToReRegister = User::find(1);
+        $otherUser = User::find(2);
+        $fullEvent = Event::find(3);
+
+        \App\Models\Registration::create([
+            'user_id' => $otherUser->id,
+            'event_id' => $fullEvent->id,
+            'status' => RegistrationStatus::REGISTERED,
+        ]);
+
+        \App\Models\Registration::create([
+            'user_id' => $userToReRegister->id,
+            'event_id' => $fullEvent->id,
+            'status' => RegistrationStatus::CANCELLED,
+        ]);
+
+        $this->assertDatabaseCount('registrations', 2);
+
+        $response = $this->actingAs($userToReRegister)
+                         ->postJson("/api/{$fullEvent->id}/register");
+
+        $response->assertStatus(200);
+        $response->assertJson(['waitlist_position' => 1]);
+
+        $this->assertDatabaseHas('registrations', [
+            'user_id' => $userToReRegister->id,
+            'event_id' => $fullEvent->id,
+            'status' => 'queued',
+        ]);
+
+        $this->assertDatabaseCount('registrations', 2);
     }
 }
